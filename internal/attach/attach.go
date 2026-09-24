@@ -83,6 +83,7 @@ func Attach(iface Interface) (mac string, err error) {
 		if _, err = runInNetns(iface.NetnsPath, "ip", "link", "set", iface.Name, "carrier", state); err != nil {
 			return "", fmt.Errorf("cannot refresh carrier of %s: %w", iface.Name, err)
 		}
+		time.Sleep(tapWaitInterval)
 	}
 
 	for key, value := range iface.Sysctls {
