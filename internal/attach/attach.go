@@ -76,6 +76,15 @@ func Attach(iface Interface) (mac string, err error) {
 		return "", fmt.Errorf("cannot bring %s up: %w", iface.Name, err)
 	}
 
+	// A tap already has carrier when vde_plug2tap opens it, before the interface is brought up, so the kernel
+	// never gets a carrier change afterwards and the operational state stays UNKNOWN. Toggling the carrier
+	// makes the kernel recompute it, and the interface shows as UP like a veth.
+	for _, state := range []string{"off", "on"} {
+		if _, err = runInNetns(iface.NetnsPath, "ip", "link", "set", iface.Name, "carrier", state); err != nil {
+			return "", fmt.Errorf("cannot refresh carrier of %s: %w", iface.Name, err)
+		}
+	}
+
 	for key, value := range iface.Sysctls {
 		if _, err = runInNetns(iface.NetnsPath, "sysctl", "-w", key+"="+value); err != nil {
 			return "", fmt.Errorf("cannot apply sysctl %s=%s: %w", key, value, err)
