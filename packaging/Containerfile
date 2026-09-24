@@ -5,7 +5,7 @@
 #
 # Build from the root of katharanp-netavark (submodule checked out):
 #   podman build -t katharanp-bundle -f packaging/Containerfile .
-FROM debian:11 AS build
+FROM debian:12 AS build
 
 ARG GO_VERSION=1.22.5
 ARG PREFIX=/opt/katharanp
