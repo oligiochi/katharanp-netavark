@@ -20,11 +20,8 @@ jobs:
 
       - name: Build bundle
         run: |
-          docker build -t katharanp-bundle -f packaging/Containerfile .
-          id=$(docker create katharanp-bundle)
-          mkdir -p dist
-          docker cp "$id":/out/katharanp-bundle-amd64.tar.gz dist/
-          docker rm "$id"
+          docker build -f packaging/Containerfile --output type=local,dest=dist .
+          ls -la dist/
 
       - name: Name and checksum
         run: |
