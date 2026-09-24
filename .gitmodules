@@ -1,0 +1,4 @@
+[submodule "third_party/NetworkPlugin"]
+	path = third_party/NetworkPlugin
+	url = https://github.com/oligiochi/NetworkPlugin.git
+	branch = configurable-plugin-path
