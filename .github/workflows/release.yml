@@ -1,0 +1,50 @@
+# Build the relocatable bundle (plugin + VDE) and publish it in a GitHub release for every v* tag.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0          # git describe needs the tags to compute the plugin version
+
+      - name: Build bundle
+        run: |
+          docker build -t katharanp-bundle -f packaging/Containerfile .
+          id=$(docker create katharanp-bundle)
+          mkdir -p dist
+          docker cp "$id":/out/katharanp-bundle-amd64.tar.gz dist/
+          docker rm "$id"
+
+      - name: Name and checksum
+        run: |
+          version="${GITHUB_REF_NAME}"
+          [ "${GITHUB_REF_TYPE}" = tag ] || version="dev-${GITHUB_SHA::7}"
+          name="katharanp-netavark-${version}-linux-amd64.tar.gz"
+          mv dist/katharanp-bundle-amd64.tar.gz "dist/${name}"
+          (cd dist && sha256sum "${name}" > "${name}.sha256")
+          tar -tzf "dist/${name}"
+          cat dist/*.sha256
+
+      - name: Keep the bundle as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: dist/*
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

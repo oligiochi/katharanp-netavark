@@ -78,3 +78,7 @@ RUN set -e; B=/bundle/katharanp; \
     cp /src/katharanp-netavark/LICENSE $B/licenses/katharanp-netavark.txt 2>/dev/null || true; \
     echo "katharanp-netavark $($B/bin/katharanp_vde info)" >> $B/SOURCES; \
     mkdir /out && tar -C /bundle -czf /out/katharanp-bundle-amd64.tar.gz katharanp
+
+# Export stage: only the bundle, written to the host by `podman build --output`.
+FROM scratch AS export
+COPY --from=build /out/katharanp-bundle-amd64.tar.gz /
