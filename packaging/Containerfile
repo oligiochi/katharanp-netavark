@@ -11,6 +11,13 @@ ARG GO_VERSION=1.22.5
 ARG PREFIX=/opt/katharanp
 ENV PREFIX=${PREFIX}
 
+# Make the libraries installed in $PREFIX visible to the next builds: gcc reads CPATH for headers and
+# LIBRARY_PATH for linking; LD_LIBRARY_PATH is needed by build steps that run freshly built binaries.
+ENV CPATH=${PREFIX}/include \
+    LIBRARY_PATH=${PREFIX}/lib \
+    LD_LIBRARY_PATH=${PREFIX}/lib \
+    PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake autoconf automake libtool pkg-config git ca-certificates curl patch patchelf \
     && rm -rf /var/lib/apt/lists/*
