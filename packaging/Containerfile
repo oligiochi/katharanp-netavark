@@ -1,6 +1,7 @@
 # Spike P17 — relocatable bundle of the Kathará netavark plugin with VDE.
 #
-# Built on an old glibc (Debian 11) so that the binaries run on newer distributions.
+# Built on an older glibc (Debian 12, glibc 2.36) so that the binaries run on newer distributions
+# (every distribution shipping Podman 5 has a newer glibc).
 # Everything is installed under $PREFIX with RPATH=$ORIGIN/../lib, so the bundle can be moved anywhere.
 #
 # Build from the root of katharanp-netavark (submodule checked out):
@@ -10,7 +11,6 @@ FROM debian:12 AS build
 ARG GO_VERSION=1.22.5
 ARG PREFIX=/opt/katharanp
 ENV PREFIX=${PREFIX}
-
 # Make the libraries installed in $PREFIX visible to the next builds: gcc reads CPATH for headers and
 # LIBRARY_PATH for linking; LD_LIBRARY_PATH is needed by build steps that run freshly built binaries.
 ENV CPATH=${PREFIX}/include \
@@ -59,9 +59,22 @@ RUN CGO_ENABLED=1 \
     go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
        -o ${PREFIX}/bin/katharanp_vde ./cmd/katharanp_vde
 
-# 5. make sure every ELF file in the bundle has a relative RPATH (patchelf fails on non-ELF files), then pack
-RUN set -e; \
-    for f in ${PREFIX}/bin/*; do patchelf --set-rpath '$ORIGIN/../lib' "$f" 2>/dev/null || true; done; \
+# 5. make sure every ELF file has a relative RPATH (patchelf fails on non-ELF files)
+RUN for f in ${PREFIX}/bin/*; do patchelf --set-rpath '$ORIGIN/../lib' "$f" 2>/dev/null || true; done; \
     for f in ${PREFIX}/lib/*.so*; do [ -L "$f" ] || patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true; done; \
-    for f in ${PREFIX}/lib/vdeplug/*.so*; do [ -L "$f" ] || patchelf --set-rpath '$ORIGIN/..' "$f" 2>/dev/null || true; done; \
-    mkdir /out && tar -C "$(dirname ${PREFIX})" -czf /out/katharanp-bundle-amd64.tar.gz "$(basename ${PREFIX})"
+    for f in ${PREFIX}/lib/vdeplug/*.so*; do [ -L "$f" ] || patchelf --set-rpath '$ORIGIN/..' "$f" 2>/dev/null || true; done
+
+# 6. minimal bundle: only what the plugin uses, plus licenses and the exact source revisions (VDE is GPL)
+RUN set -e; B=/bundle/katharanp; \
+    mkdir -p $B/bin $B/lib/vdeplug $B/licenses; \
+    cp ${PREFIX}/bin/katharanp_vde ${PREFIX}/bin/vde_switch ${PREFIX}/bin/vde_plug2tap $B/bin/; \
+    cp -a ${PREFIX}/lib/libvdeplug.so* ${PREFIX}/lib/libvdeplug_mod.so* ${PREFIX}/lib/libexecs.so* $B/lib/; \
+    cp -a ${PREFIX}/lib/vdeplug/libvdeplug_vde.so* $B/lib/vdeplug/; \
+    for d in s2argv-execs vdeplug4 vde-2; do \
+        mkdir -p $B/licenses/$d; \
+        cp /src/$d/COPYING* /src/$d/LICENSE* $B/licenses/$d/ 2>/dev/null || true; \
+        echo "$d $(git -C /src/$d remote get-url origin) $(git -C /src/$d rev-parse HEAD)" >> $B/SOURCES; \
+    done; \
+    cp /src/katharanp-netavark/LICENSE $B/licenses/katharanp-netavark.txt 2>/dev/null || true; \
+    echo "katharanp-netavark $($B/bin/katharanp_vde info)" >> $B/SOURCES; \
+    mkdir /out && tar -C /bundle -czf /out/katharanp-bundle-amd64.tar.gz katharanp
