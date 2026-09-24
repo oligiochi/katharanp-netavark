@@ -81,11 +81,20 @@ func Attach(iface Interface) (mac string, err error) {
 		}
 	}
 
-	out, err := runInNetns(iface.NetnsPath, "cat", "/sys/class/net/"+iface.Name+"/address")
+	// Read the MAC through netlink (ip -j): /sys/class/net would show the namespace sysfs was mounted in,
+	// not the one nsenter entered.
+	out, err := runInNetns(iface.NetnsPath, "ip", "-j", "link", "show", "dev", iface.Name)
 	if err != nil {
 		return "", fmt.Errorf("cannot read MAC address of %s: %w", iface.Name, err)
 	}
-	return strings.TrimSpace(out), nil
+	var links []struct {
+		Address string `json:"address"`
+	}
+	if err = json.Unmarshal([]byte(out), &links); err != nil || len(links) == 0 {
+		err = fmt.Errorf("cannot parse MAC address of %s from %q", iface.Name, out)
+		return "", err
+	}
+	return links[0].Address, nil
 }
 
 // waitForInterface waits until an interface exists in a network namespace.
