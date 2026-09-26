@@ -53,11 +53,12 @@ RUN git clone --depth 1 https://github.com/virtualsquare/vde-2 && cd vde-2 \
 # 4. the plugin, linked against the bundled libvdeplug
 WORKDIR /src/katharanp-netavark
 COPY . .
+RUN CGO_ENABLED=1 CGO_CFLAGS="-I${PREFIX}/include" CGO_LDFLAGS="-L${PREFIX}/lib" go test ./...
 RUN CGO_ENABLED=1 \
     CGO_CFLAGS="-I${PREFIX}/include" \
     CGO_LDFLAGS="-L${PREFIX}/lib -Wl,-rpath,\$ORIGIN/../lib" \
     go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
-       -o ${PREFIX}/bin/katharanp_vde ./cmd/katharanp_vde
+       -o ${PREFIX}/bin/katharanp_vde ./cmd/katharanp_vde \
 
 # 5. make sure every ELF file has a relative RPATH (patchelf fails on non-ELF files)
 RUN for f in ${PREFIX}/bin/*; do patchelf --set-rpath '$ORIGIN/../lib' "$f" 2>/dev/null || true; done; \
