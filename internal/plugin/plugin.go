@@ -3,9 +3,6 @@
 // A collision domain is a VDE switch (created with the Kathará NetworkPlugin library), started when the
 // first interface is attached and stopped when the last one is detached: netavark has no "network
 // removed" hook. Each container interface is attached through the attach package.
-// Setup and Teardown are never concurrent for the same user: libpod serializes every netavark
-// setup/teardown behind a per-user file lock (netavark.lock in the network config dir), so the
-// check-then-create in ensureSwitch and the count-then-delete in stopSwitchIfUnused need no locking.
 package plugin
 
 import (
@@ -108,7 +105,9 @@ func sysctls(networkOpts, connectionOpts map[string]string, ifname string) map[s
 	return result
 }
 
-// ensureSwitch starts the switch of a network if it is not running yet.
+// Setup and Teardown are never concurrent for the same user: libpod serializes every netavark
+// setup/teardown behind a per-user file lock (netavark.lock in the network config dir), so the
+// check-then-create in ensureSwitch and the count-then-delete in stopSwitchIfUnused need no locking.
 func ensureSwitch(networkID string) (string, error) {
 	switchName := switchNameFor(networkID)
 	if switchRunning(switchName) {
