@@ -79,6 +79,7 @@ RUN set -e; B=/bundle/katharanp; \
         cp /src/$d/COPYING* /src/$d/LICENSE* $B/licenses/$d/ 2>/dev/null || true; \
         echo "$d $(git -C /src/$d remote get-url origin) $(git -C /src/$d rev-parse HEAD)" >> $B/SOURCES; \
     done; \
+    mkdir -p $B/licenses/patches && cp /src/*.patch $B/licenses/patches/; \
     cp /src/katharanp-netavark/LICENSE $B/licenses/katharanp-netavark.txt 2>/dev/null || true; \
     echo "katharanp-netavark $($B/bin/katharanp_vde info)" >> $B/SOURCES; \
     mkdir /out && tar -C /bundle -czf /out/katharanp-bundle-amd64.tar.gz katharanp
