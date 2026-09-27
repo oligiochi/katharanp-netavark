@@ -11,7 +11,15 @@ permissions:
 
 jobs:
   bundle:
-    runs-on: ubuntu-latest
+    # Native builds on GitHub-hosted runners of each architecture: no emulation.
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,8 +38,9 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME}"
           [ "${GITHUB_REF_TYPE}" = tag ] || version="dev-${GITHUB_SHA::7}"
-          name="katharanp-netavark-${version}-linux-amd64.tar.gz"
-          mv dist/katharanp-bundle-amd64.tar.gz "dist/${name}"
+          name="katharanp-netavark-${version}-linux-${{ matrix.arch }}.tar.gz"
+          mv "dist/katharanp-bundle-${{ matrix.arch }}.tar.gz" "dist/${name}"
+          tar -xzOf "dist/${name}" katharanp/bin/katharanp_vde | file -
           (cd dist && sha256sum "${name}" > "${name}.sha256")
           tar -tzf "dist/${name}"
           cat dist/*.sha256
@@ -39,11 +48,22 @@ jobs:
       - name: Keep the bundle as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bundle
+          name: bundle-${{ matrix.arch }}
           path: dist/*
 
+  # One job publishes every architecture, so that the matrix jobs do not race to create the release.
+  publish:
+    if: github.ref_type == 'tag'
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+
       - name: Publish release
-        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*

@@ -22,7 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake autoconf automake libtool pkg-config git ca-certificates curl patch patchelf \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz
+# Native build: the architecture of the bundle is the one of the build host (amd64 or arm64), with the
+# same names Go and Debian use.
+RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xz
 ENV PATH=/usr/local/go/bin:$PATH
 
 # Every binary and library looks for its dependencies in ../lib relative to itself.
@@ -82,8 +84,8 @@ RUN set -e; B=/bundle/katharanp; \
     mkdir -p $B/licenses/patches && cp /src/*.patch $B/licenses/patches/; \
     cp /src/katharanp-netavark/LICENSE $B/licenses/katharanp-netavark.txt 2>/dev/null || true; \
     echo "katharanp-netavark $($B/bin/katharanp_vde info)" >> $B/SOURCES; \
-    mkdir /out && tar -C /bundle -czf /out/katharanp-bundle-amd64.tar.gz katharanp
+    mkdir /out && tar -C /bundle -czf /out/katharanp-bundle-$(dpkg --print-architecture).tar.gz katharanp
 
 # Export stage: only the bundle, written to the host by `podman build --output`.
 FROM scratch AS export
-COPY --from=build /out/katharanp-bundle-amd64.tar.gz /
+COPY --from=build /out/ /
