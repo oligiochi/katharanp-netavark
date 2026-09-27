@@ -20,7 +20,12 @@ import (
 // SysctlOptionPrefix marks per-interface sysctls in network and per-connection options.
 // IFNAME in the key is replaced with the interface name (same convention as Docker endpoint sysctls).
 const SysctlOptionPrefix = "sysctl."
-
+// Indirections over the operations that start or stop real processes, replaced in tests.
+var (
+createSwitch = katnplib.CreateSwitch
+deleteSwitch = katnplib.DeleteSwitch
+attachIface  = attach.Attach
+)
 // stateDir is where switches and interface handles are kept: per user, cleaned at logout.
 func stateDir() string {
 	base := os.Getenv("XDG_RUNTIME_DIR")
@@ -67,7 +72,7 @@ func Setup(netnsPath string, payload netavark.PluginExec) (*netavark.StatusBlock
 		HandleID:  payload.ContainerID + "-" + ifname,
 	}
 
-	mac, err := attach.Attach(iface)
+	mac, err := attachIface(iface)
 	if err != nil {
 		stopSwitchIfUnused(payload.Network.ID, switchName)
 		return nil, err
@@ -105,18 +110,20 @@ func sysctls(networkOpts, connectionOpts map[string]string, ifname string) map[s
 	return result
 }
 
-// ensureSwitch starts the switch of a network if it is not running yet.
+// Setup and Teardown are never concurrent for the same user: libpod serializes every netavark
+// setup/teardown behind a per-user file lock (netavark.lock in the network config dir), so the
+// check-then-create in ensureSwitch and the count-then-delete in stopSwitchIfUnused need no locking.
 func ensureSwitch(networkID string) (string, error) {
 	switchName := switchNameFor(networkID)
 	if switchRunning(switchName) {
 		return switchName, nil
 	}
-	return katnplib.CreateSwitch(networkID)
+	return createSwitch(networkID)
 }
 
 func stopSwitchIfUnused(networkID string, switchName string) {
 	if attach.Count(handleDir(switchName)) == 0 && switchRunning(switchName) {
-		_ = katnplib.DeleteSwitch(networkID)
+		_ = deleteSwitch(networkID)
 	}
 }
 

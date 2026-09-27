@@ -22,7 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake autoconf automake libtool pkg-config git ca-certificates curl patch patchelf \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz
+# Native build: the architecture of the bundle is the one of the build host (amd64 or arm64), with the
+# same names Go and Debian use.
+RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xz
 ENV PATH=/usr/local/go/bin:$PATH
 
 # Every binary and library looks for its dependencies in ../lib relative to itself.
@@ -37,14 +39,17 @@ RUN git clone --depth 1 https://github.com/rd235/s2argv-execs.git && cd s2argv-e
     && make -j"$(nproc)" && make install
 
 # 2. vdeplug4 (libvdeplug and its modules; needed by vde_plug2tap and by the plugin through cgo)
+COPY packaging/patches/vdeplug4-libgen.patch /src/
 RUN git clone --depth 1 https://github.com/rd235/vdeplug4.git && cd vdeplug4 \
-    && sed -i '1i#include <libgen.h>' srcvdeplug4/vde_plug.c \
+    && patch -p1 < /src/vdeplug4-libgen.patch \
     && mkdir build && cd build && cmake ${CMAKE_COMMON} .. && make -j"$(nproc)" && make install
 
 # 3. vde-2 with the jumbo frames patch of the Docker plugin; TUNTAP stays ON (we need vde_plug2tap)
 COPY third_party/NetworkPlugin/vde/img-src/support-for-jumbo.patch /src/
+COPY packaging/patches/vde_plug2tap-jumbo.patch /src/
 RUN git clone --depth 1 https://github.com/virtualsquare/vde-2 && cd vde-2 \
     && patch -p1 < /src/support-for-jumbo.patch \
+    && patch -p1 < /src/vde_plug2tap-jumbo.patch \
     && mkdir build && cd build \
     && cmake ${CMAKE_COMMON} -DENABLE_CRYPTCAB=OFF -DENABLE_VDE_OVER_NS=OFF -DENABLE_ROUTER=OFF \
              -DENABLE_VXLAN=OFF -DENABLE_PCAP=OFF .. \
@@ -53,6 +58,7 @@ RUN git clone --depth 1 https://github.com/virtualsquare/vde-2 && cd vde-2 \
 # 4. the plugin, linked against the bundled libvdeplug
 WORKDIR /src/katharanp-netavark
 COPY . .
+RUN CGO_ENABLED=1 CGO_CFLAGS="-I${PREFIX}/include" CGO_LDFLAGS="-L${PREFIX}/lib" go test ./...
 RUN CGO_ENABLED=1 \
     CGO_CFLAGS="-I${PREFIX}/include" \
     CGO_LDFLAGS="-L${PREFIX}/lib -Wl,-rpath,\$ORIGIN/../lib" \
@@ -75,10 +81,11 @@ RUN set -e; B=/bundle/katharanp; \
         cp /src/$d/COPYING* /src/$d/LICENSE* $B/licenses/$d/ 2>/dev/null || true; \
         echo "$d $(git -C /src/$d remote get-url origin) $(git -C /src/$d rev-parse HEAD)" >> $B/SOURCES; \
     done; \
+    mkdir -p $B/licenses/patches && cp /src/*.patch $B/licenses/patches/; \
     cp /src/katharanp-netavark/LICENSE $B/licenses/katharanp-netavark.txt 2>/dev/null || true; \
     echo "katharanp-netavark $($B/bin/katharanp_vde info)" >> $B/SOURCES; \
-    mkdir /out && tar -C /bundle -czf /out/katharanp-bundle-amd64.tar.gz katharanp
+    mkdir /out && tar -C /bundle -czf /out/katharanp-bundle-$(dpkg --print-architecture).tar.gz katharanp
 
 # Export stage: only the bundle, written to the host by `podman build --output`.
 FROM scratch AS export
-COPY --from=build /out/katharanp-bundle-amd64.tar.gz /
+COPY --from=build /out/ /
