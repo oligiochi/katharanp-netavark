@@ -3,6 +3,7 @@ package bridge
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,10 +18,11 @@ const testNetworkID = "963ca160b022aabbccddeeff00112233"
 
 // fakeKernel records the calls and fails the one named in failOn.
 type fakeKernel struct {
-	calls   []string
-	links   map[string]bool
-	failOn  string
-	portCnt int
+	calls     []string
+	links     map[string]bool
+	failOn    string
+	portCnt   int
+	sysctlErr error
 }
 
 func (f *fakeKernel) call(name string, args ...string) error {
@@ -40,7 +42,10 @@ func (f *fakeKernel) addBridge(name string) error {
 }
 func (f *fakeKernel) configureBridge(name string) error { return f.call("configureBridge", name) }
 func (f *fakeKernel) writeSysctl(path, value string) error {
-	return f.call("writeSysctl", filepath.Base(filepath.Dir(path)), value)
+	if err := f.call("writeSysctl", filepath.Base(filepath.Dir(path)), value); err != nil {
+		return err
+	}
+	return f.sysctlErr
 }
 func (f *fakeKernel) setMTU(name string, mtu int) error {
 	return f.call("setMTU", name, fmt.Sprint(mtu))
@@ -129,6 +134,18 @@ func TestEnsureDomainCreatesBridgeInOrder(t *testing.T) {
 	}
 	if got := strings.Join(f.calls, "|"); got != "linkExists" {
 		t.Errorf("existing bridge: calls %s", got)
+	}
+}
+
+// A kernel booted with ipv6.disable=1 has no IPv6 sysctls: the bridge must still be created.
+func TestEnsureDomainWithoutIPv6(t *testing.T) {
+	f, _ := fakeEnv(t)
+	f.sysctlErr = fmt.Errorf("open disable_ipv6: %w", fs.ErrNotExist)
+	if _, err := (Driver{}).EnsureDomain(testNetworkID); err != nil {
+		t.Fatalf("EnsureDomain without IPv6: %v", err)
+	}
+	if !f.links["kt-963ca160b022"] {
+		t.Error("bridge not created")
 	}
 }
 

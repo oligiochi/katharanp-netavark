@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -91,7 +92,8 @@ func createBridge(name string) (err error) {
 	if err = kern.configureBridge(name); err != nil {
 		return err
 	}
-	if err = kern.writeSysctl(ipv6SysctlPath(procSys, name), "1"); err != nil {
+	// Without IPv6 in the kernel (ipv6.disable=1) the sysctl does not exist and there is no address to remove.
+	if err = kern.writeSysctl(ipv6SysctlPath(procSys, name), "1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("cannot disable IPv6: %w", err)
 	}
 	if err = kern.setMTU(name, hostMTU); err != nil {
