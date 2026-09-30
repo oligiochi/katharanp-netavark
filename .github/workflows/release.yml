@@ -1,4 +1,4 @@
-# Build the relocatable bundle (plugin + VDE) and publish it in a GitHub release for every v* tag.
+# Build the relocatable bundle (both plugins + VDE) and publish it in a GitHub release for every v* tag.
 name: release
 
 on:
@@ -37,7 +37,9 @@ jobs:
           [ "${GITHUB_REF_TYPE}" = tag ] || version="dev-${GITHUB_SHA::7}"
           name="katharanp-netavark-${version}-linux-${{ matrix.arch }}.tar.gz"
           mv "dist/katharanp-bundle-${{ matrix.arch }}.tar.gz" "dist/${name}"
-          tar -xzOf "dist/${name}" katharanp/bin/katharanp_vde | file -
+          for bin in katharanp_vde katharanp; do
+            tar -xzOf "dist/${name}" "katharanp/bin/${bin}" | file -
+          done
           (cd dist && sha256sum "${name}" > "${name}.sha256")
           tar -tzf "dist/${name}"
           cat dist/*.sha256

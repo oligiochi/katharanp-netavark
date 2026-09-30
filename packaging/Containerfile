@@ -55,7 +55,7 @@ RUN git clone --depth 1 https://github.com/virtualsquare/vde-2 && cd vde-2 \
              -DENABLE_VXLAN=OFF -DENABLE_PCAP=OFF .. \
     && make -j"$(nproc)" && make install
 
-# 4. the plugin, linked against the bundled libvdeplug
+# 4. the plugins: katharanp_vde linked against the bundled libvdeplug, katharanp (Linux bridge) static
 WORKDIR /src/katharanp-netavark
 COPY . .
 RUN CGO_ENABLED=1 CGO_CFLAGS="-I${PREFIX}/include" CGO_LDFLAGS="-L${PREFIX}/lib" go test ./...
@@ -64,6 +64,9 @@ RUN CGO_ENABLED=1 \
     CGO_LDFLAGS="-L${PREFIX}/lib -Wl,-rpath,\$ORIGIN/../lib" \
     go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
        -o ${PREFIX}/bin/katharanp_vde ./cmd/katharanp_vde
+RUN CGO_ENABLED=0 \
+    go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
+       -o ${PREFIX}/bin/katharanp ./cmd/katharanp
 
 # 5. make sure every ELF file has a relative RPATH (patchelf fails on non-ELF files)
 RUN for f in ${PREFIX}/bin/*; do patchelf --set-rpath '$ORIGIN/../lib' "$f" 2>/dev/null || true; done; \
@@ -73,7 +76,7 @@ RUN for f in ${PREFIX}/bin/*; do patchelf --set-rpath '$ORIGIN/../lib' "$f" 2>/d
 # 6. minimal bundle: only what the plugin uses, plus licenses and the exact source revisions (VDE is GPL)
 RUN set -e; B=/bundle/katharanp; \
     mkdir -p $B/bin $B/lib/vdeplug $B/licenses; \
-    cp ${PREFIX}/bin/katharanp_vde ${PREFIX}/bin/vde_switch ${PREFIX}/bin/vde_plug2tap $B/bin/; \
+    cp ${PREFIX}/bin/katharanp_vde ${PREFIX}/bin/katharanp ${PREFIX}/bin/vde_switch ${PREFIX}/bin/vde_plug2tap $B/bin/; \
     cp -a ${PREFIX}/lib/libvdeplug.so* ${PREFIX}/lib/libvdeplug_mod.so* ${PREFIX}/lib/libexecs.so* $B/lib/; \
     cp -a ${PREFIX}/lib/vdeplug/libvdeplug_vde.so* $B/lib/vdeplug/; \
     for d in s2argv-execs vdeplug4 vde-2; do \
@@ -84,6 +87,7 @@ RUN set -e; B=/bundle/katharanp; \
     mkdir -p $B/licenses/patches && cp /src/*.patch $B/licenses/patches/; \
     cp /src/katharanp-netavark/LICENSE $B/licenses/katharanp-netavark.txt 2>/dev/null || true; \
     echo "katharanp-netavark $($B/bin/katharanp_vde info)" >> $B/SOURCES; \
+    echo "katharanp $($B/bin/katharanp info)" >> $B/SOURCES; \
     mkdir /out && tar -C /bundle -czf /out/katharanp-bundle-$(dpkg --print-architecture).tar.gz katharanp
 
 # Export stage: only the bundle, written to the host by `podman build --output`.
