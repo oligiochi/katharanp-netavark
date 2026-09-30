@@ -54,3 +54,13 @@ type Info struct {
 type Error struct {
 	Error string `json:"error"`
 }
+
+// DomainName returns the name of the data plane object (VDE switch or Linux bridge) of a network:
+// "kt-" plus the first 12 characters of the network ID, 15 characters in total, the kernel limit for
+// interface names.
+func DomainName(networkID string) string {
+	if len(networkID) > 12 {
+		networkID = networkID[:12]
+	}
+	return "kt-" + networkID
+}
