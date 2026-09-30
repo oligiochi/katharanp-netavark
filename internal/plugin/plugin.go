@@ -1,17 +1,14 @@
-// Package plugin implements the operations of the Kathará netavark plugin.
+// Package plugin implements the operations of the Kathará netavark plugin that do not depend on the data
+// plane: validating networks, computing sysctls, and deciding when a collision domain is created and
+// removed. The data plane itself (a VDE switch, a Linux bridge) sits behind the Driver interface.
 //
-// A collision domain is a VDE switch (created with the Kathará NetworkPlugin library), started when the
-// first interface is attached and stopped when the last one is detached: netavark has no "network
-// removed" hook. Each container interface is attached through the attach package.
+// A collision domain is created when the first interface is attached and removed when the last one is
+// detached: netavark has no "network removed" hook.
 package plugin
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-
-	katnplib "github.com/KatharaFramework/NetworkPluginLib"
 
 	"github.com/oligiochi/katharanp-netavark/internal/attach"
 	"github.com/oligiochi/katharanp-netavark/internal/netavark"
@@ -20,24 +17,26 @@ import (
 // SysctlOptionPrefix marks per-interface sysctls in network and per-connection options.
 // IFNAME in the key is replaced with the interface name (same convention as Docker endpoint sysctls).
 const SysctlOptionPrefix = "sysctl."
-// Indirections over the operations that start or stop real processes, replaced in tests.
-var (
-createSwitch = katnplib.CreateSwitch
-deleteSwitch = katnplib.DeleteSwitch
-attachIface  = attach.Attach
-)
-// stateDir is where switches and interface handles are kept: per user, cleaned at logout.
-func stateDir() string {
-	base := os.Getenv("XDG_RUNTIME_DIR")
-	if base == "" {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "katharanp") + "/"
+
+// Driver is the data plane of a collision domain. A domain is named after its network
+// (netavark.DomainName); drivers must tolerate being called for a domain that does not exist.
+type Driver interface {
+	// EnsureDomain creates the switch/bridge of a network if it is missing and returns its name.
+	EnsureDomain(networkID string) (domain string, err error)
+	// Attach creates the interface in the container and connects it to the domain; it returns the MAC
+	// address of the interface. On error, nothing is left behind.
+	Attach(domain string, iface attach.Interface) (mac string, err error)
+	// Detach removes a container interface from the domain. An interface that is already gone is not an error.
+	Detach(domain string, netnsPath, containerID, ifname string) error
+	// InUse reports whether any interface is still attached to the domain.
+	InUse(domain string) bool
+	// DeleteDomain removes the domain of a network, if it exists.
+	DeleteDomain(networkID string) error
 }
 
-func init() {
-	// Requires the upstream change making pluginPath configurable (default: /hosttmp/katharanp/).
-	katnplib.SetPluginPath(stateDir())
+// Plugin runs the netavark operations on top of a Driver.
+type Plugin struct {
+	Driver Driver
 }
 
 // Validate checks the options of a network definition at `create` time.
@@ -50,31 +49,29 @@ func Validate(network netavark.Network) error {
 	return nil
 }
 
-// Setup attaches a container interface to the collision domain switch.
-func Setup(netnsPath string, payload netavark.PluginExec) (*netavark.StatusBlock, error) {
+// Setup attaches a container interface to the collision domain of its network.
+func (p Plugin) Setup(netnsPath string, payload netavark.PluginExec) (*netavark.StatusBlock, error) {
 	ifname := payload.NetworkOptions.InterfaceName
 	if ifname == "" {
 		return nil, fmt.Errorf("interface_name is required")
 	}
 
-	switchName, err := ensureSwitch(payload.Network.ID)
+	domain, err := p.Driver.EnsureDomain(payload.Network.ID)
 	if err != nil {
-		return nil, fmt.Errorf("cannot start switch: %w", err)
+		return nil, fmt.Errorf("cannot create collision domain: %w", err)
 	}
 
 	iface := attach.Interface{
-		NetnsPath: netnsPath,
-		SwitchCtl: switchCtlPath(switchName),
-		Name:      ifname,
-		MAC:       payload.NetworkOptions.StaticMAC,
-		Sysctls:   sysctls(payload.Network.Options, payload.NetworkOptions.Options, ifname),
-		HandleDir: handleDir(switchName),
-		HandleID:  payload.ContainerID + "-" + ifname,
+		NetnsPath:   netnsPath,
+		ContainerID: payload.ContainerID,
+		Name:        ifname,
+		MAC:         payload.NetworkOptions.StaticMAC,
+		Sysctls:     sysctls(payload.Network.Options, payload.NetworkOptions.Options, ifname),
 	}
 
-	mac, err := attachIface(iface)
+	mac, err := p.Driver.Attach(domain, iface)
 	if err != nil {
-		stopSwitchIfUnused(payload.Network.ID, switchName)
+		p.deleteDomainIfUnused(payload.Network.ID, domain)
 		return nil, err
 	}
 
@@ -87,12 +84,21 @@ func Setup(netnsPath string, payload netavark.PluginExec) (*netavark.StatusBlock
 	}, nil
 }
 
-// Teardown detaches a container interface and stops the switch if it has no interfaces left.
-func Teardown(netnsPath string, payload netavark.PluginExec) error {
-	switchName := switchNameFor(payload.Network.ID)
-	err := attach.Detach(handleDir(switchName), payload.ContainerID+"-"+payload.NetworkOptions.InterfaceName)
-	stopSwitchIfUnused(payload.Network.ID, switchName)
+// Teardown detaches a container interface and removes the domain if it has no interfaces left.
+func (p Plugin) Teardown(netnsPath string, payload netavark.PluginExec) error {
+	domain := netavark.DomainName(payload.Network.ID)
+	err := p.Driver.Detach(domain, netnsPath, payload.ContainerID, payload.NetworkOptions.InterfaceName)
+	p.deleteDomainIfUnused(payload.Network.ID, domain)
 	return err
+}
+
+// Setup and Teardown are never concurrent for the same user: libpod serializes every netavark
+// setup/teardown behind a per-user file lock (netavark.lock in the network config dir), so the
+// check-then-delete below needs no locking.
+func (p Plugin) deleteDomainIfUnused(networkID string, domain string) {
+	if !p.Driver.InUse(domain) {
+		_ = p.Driver.DeleteDomain(networkID)
+	}
 }
 
 // sysctls merges network-level and per-connection sysctl options (the latter take precedence),
@@ -108,40 +114,4 @@ func sysctls(networkOpts, connectionOpts map[string]string, ifname string) map[s
 		}
 	}
 	return result
-}
-
-// Setup and Teardown are never concurrent for the same user: libpod serializes every netavark
-// setup/teardown behind a per-user file lock (netavark.lock in the network config dir), so the
-// check-then-create in ensureSwitch and the count-then-delete in stopSwitchIfUnused need no locking.
-func ensureSwitch(networkID string) (string, error) {
-	switchName := switchNameFor(networkID)
-	if switchRunning(switchName) {
-		return switchName, nil
-	}
-	return createSwitch(networkID)
-}
-
-func stopSwitchIfUnused(networkID string, switchName string) {
-	if attach.Count(handleDir(switchName)) == 0 && switchRunning(switchName) {
-		_ = deleteSwitch(networkID)
-	}
-}
-
-// The helpers below mirror the (unexported) naming of katnplib's switch_utils.go.
-
-func switchNameFor(networkID string) string {
-	return "kt-" + networkID[:12]
-}
-
-func switchCtlPath(switchName string) string {
-	return stateDir() + switchName + "/ctl"
-}
-
-func handleDir(switchName string) string {
-	return stateDir() + switchName + "/ifaces"
-}
-
-func switchRunning(switchName string) bool {
-	_, err := os.Stat(stateDir() + switchName + "/pid")
-	return err == nil
 }
